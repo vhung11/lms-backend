@@ -1,0 +1,342 @@
+﻿using e_learning.Data.Entities.Identity;
+using e_learning.Data.Helpers;
+using e_learning.infrastructure.Context;
+using e_learning.infrastructure.Repositories;
+using e_learning.Services.Abstructs;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.IdentityModel.Tokens;
+using System.Collections.Concurrent;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace e_learning.Services.Implementations
+{
+    public class AuthenticationServices : IAuthenticationServices
+    {
+        #region Fields
+        private readonly JwtSettings _jwtSettings;
+        private readonly IUserRefreshTokenRepository _userRefreshTokenRepository;
+        private readonly ConcurrentDictionary<string, RefreshToken> _userRefreshToken;
+        private readonly UserManager<User> _userManager;
+        private readonly IUserRefreshTokenRepository _refreshTokenRepository;
+        private readonly IEmailServices _emailServices;
+        private readonly IInstructorRepository _instructorRepository;
+        private readonly IStudentRepository _studentRepository;
+        private readonly ApplicationDbContext _dbContext;
+
+        #endregion
+
+        #region Constructors
+        public AuthenticationServices(JwtSettings jwtSettings,
+             IInstructorRepository instructorRepository,
+             IStudentRepository studentRepository,
+                                     IUserRefreshTokenRepository userRefreshTokenRepository,
+                                     UserManager<User> userManager,
+                                     IUserRefreshTokenRepository refreshTokenRepository,
+                                     IEmailServices emailServices,
+                                     ApplicationDbContext dbContext)
+        {
+            _jwtSettings = jwtSettings;
+            _instructorRepository = instructorRepository;
+            _studentRepository = studentRepository;
+            _userRefreshTokenRepository = userRefreshTokenRepository;
+            _userRefreshToken = new ConcurrentDictionary<string, RefreshToken>();
+            _userManager = userManager;
+            _refreshTokenRepository = refreshTokenRepository;
+            _emailServices = emailServices;
+            _dbContext = dbContext;
+        }
+
+        #endregion
+
+        #region Handle Functions
+
+
+        public async Task<IDbContextTransaction> BeginTransactionAsync()
+        {
+            return await _dbContext.Database.BeginTransactionAsync();
+        }
+
+        public async Task CommitAsync()
+        {
+            await _dbContext.Database.CommitTransactionAsync();
+        }
+
+        public async Task RollbackAsync()
+        {
+            await _dbContext.Database.RollbackTransactionAsync();
+        }
+        public async Task SaveChangesAsync()
+        {
+            await _dbContext.SaveChangesAsync();
+        }
+
+        public async Task<string> ValidateToken(string accessToken)
+        {
+
+            var handler = new JwtSecurityTokenHandler();
+            var parameterHandler = new TokenValidationParameters
+            {
+                ValidateIssuer = _jwtSettings.ValidateIssuer,
+                ValidIssuers = new[] { _jwtSettings.Issuer },
+                ValidateIssuerSigningKey = _jwtSettings.ValidateIssuerSigningKey,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(_jwtSettings.Secret)),
+                ValidAudience = _jwtSettings.Audience,
+                ValidateAudience = _jwtSettings.ValidateAudience,
+                ValidateLifetime = _jwtSettings.ValidateLifeTime,
+            };
+
+            try
+            {
+                var validator = handler.ValidateToken(accessToken, parameterHandler, out SecurityToken validatedToken);
+
+                if (validatedToken == null)
+                {
+                    return "InvalidToken";
+                }
+                return "NotExpired";
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+
+
+
+        public async Task<JwtAuthResult> GetJwtToken(User user)
+        {
+            var (jwtToken, accessToken) = await GetJWTToken(user);
+            var refreshToken = GetRefreshToken(user.UserName);
+
+            var refreshTokenResult = new UserRefreshToken
+            {
+                Token = accessToken,
+                RefreshToken = refreshToken.TokenString,
+                IsRevoked = false,
+                IsUsed = true,
+                AddedTime = DateTime.UtcNow,
+                ExpiryDate = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpireDate),
+                UserId = user.Id,
+                JwtId = jwtToken.Id,
+            };
+
+            //add this data in UserRefreshTokenTable in database
+            await _userRefreshTokenRepository.AddAsync(refreshTokenResult);
+
+            var response = new JwtAuthResult();
+            response.AccessToken = accessToken;
+            response.RefreshToken = refreshToken;
+            return response;
+
+        }
+        #endregion
+
+        #region Claims Functions
+        public async Task<List<Claim>> GetClaims(User user)
+        {
+            var roles = await _userManager.GetRolesAsync(user);
+            var instructor = await _instructorRepository.GetByEmailAsync(user.Email);
+            var student = await _studentRepository.GetByEmailAsync(user.Email);
+
+            var claims = new List<Claim>()
+            {
+                new Claim(nameof(UserClaimModel.UserName), user.UserName),
+                new Claim(nameof(UserClaimModel.Id), user.Id.ToString()),
+
+                new Claim(nameof(UserClaimModel.Email), user.Email),
+
+                new Claim(ClaimTypes.NameIdentifier,user.UserName)
+            };
+
+            foreach (var role in roles)
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            if (instructor != null)
+            {
+                var claim = new Claim(nameof(UserClaimModel.instructorId), instructor.Id.ToString());
+                claims.Add(claim);
+            }
+            if (student != null)
+            {
+                var claim = new Claim(nameof(UserClaimModel.studentId), student.Id.ToString());
+                claims.Add(claim);
+            }
+            var userClaims = await _userManager.GetClaimsAsync(user);
+            claims.AddRange(userClaims);
+            return claims;
+        }
+        #endregion
+
+        #region JWT Token Functions  For Help
+        // using table to return more than one of types like string and JwtSecurityToken
+        private async Task<(JwtSecurityToken, string)> GetJWTToken(User user)
+        {
+            var claims = await GetClaims(user);
+            var jwtToken = new JwtSecurityToken(
+              _jwtSettings.Issuer,
+              _jwtSettings.Audience,
+                claims,
+              expires: DateTime.UtcNow.AddDays(_jwtSettings.AccessTokenExpireDate),
+              signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.ASCII.GetBytes(_jwtSettings.Secret)), SecurityAlgorithms.HmacSha256Signature));
+            //token
+            var accessToken = new JwtSecurityTokenHandler().WriteToken(jwtToken);
+
+            return (jwtToken, accessToken);
+        }
+
+
+        #endregion
+
+        #region Refresh Token Functions for Help
+        private RefreshToken GetRefreshToken(string userName)
+        {
+            var refreshToken = new RefreshToken
+            {
+                ExpierAt = DateTime.UtcNow.AddMonths(_jwtSettings.RefreshTokenExpireDate),
+                TokenString = GeneratRefreshToken(),
+                UserName = userName
+            };
+            //if refreshtoken is exist => update if not Add
+            _userRefreshToken.AddOrUpdate(refreshToken.TokenString, refreshToken, (s, r) => refreshToken);
+            return refreshToken;
+        }
+        private string GeneratRefreshToken()
+        {
+            var rondamNumber = new byte[32];
+            var rondamNumberGenerated = RandomNumberGenerator.Create();
+            rondamNumberGenerated.GetBytes(rondamNumber);
+            return Convert.ToBase64String(rondamNumber);
+        }
+
+
+        public async Task<string> ConfirmEmailAsync(int userId, string code)
+        {
+            if (userId == null || code == null)
+                return "Invalid UserId Or Code";
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+            var confirmEmail = await _userManager.ConfirmEmailAsync(user, code);
+            if (!confirmEmail.Succeeded)
+                return "Error When Confirm Email";
+            return "Success";
+        }
+
+        public async Task<string> SendResetPasswordCodeAsync(string email)
+        {
+            var transact = await _dbContext.Database.BeginTransactionAsync();
+            try
+            {
+                var user = await _userManager.FindByEmailAsync(email);
+                if (user == null)
+                    return "User Not Found";
+                //Generate random number to send in email
+                Random generator = new Random();
+                string randomNumber = generator.Next(0, 10000).ToString("D6");
+                //update user in database
+                user.Code = randomNumber;
+                var updateUser = await _userManager.UpdateAsync(user);
+                if (!updateUser.Succeeded)
+                    return "Error When send code to Email";
+
+                #region Send code in Email HTML template
+                var message = $@"
+                    <html>
+                    <head>
+                        <style>
+                            .email-container {{
+                                font-family: Arial, sans-serif;
+                                background-color: #f4f4f4;
+                                padding: 20px;
+                                text-align: center;
+                            }}
+                            .email-box {{
+                                background: white;
+                                padding: 20px;
+                                border-radius: 8px;
+                                box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+                                display: inline-block;
+                            }}
+                            .code {{
+                                font-size: 24px;
+                                font-weight: bold;
+                                color: #007bff;
+                                background-color: #f8f9fa;
+                                padding: 10px 20px;
+                                border-radius: 5px;
+                                display: inline-block;
+                                margin: 10px 0;
+                            }}
+                            .footer {{
+                                margin-top: 20px;
+                                font-size: 12px;
+                                color: #777;
+                            }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class='email-container'>
+                            <div class='email-box'>
+                                <h2>Yêu cầu đặt lại mật khẩu</h2>
+                                <p>Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu của bạn. Sử dụng mã sau để tiếp tục:</p>
+                                <span class='code'>{randomNumber}</span>
+                                <p>Nếu bạn không yêu cầu đặt lại mật khẩu, bạn có thể bỏ qua email này.</p>
+                                <p class='footer'>Mã này sẽ hết hạn sớm vì lý do bảo mật.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>";
+                #endregion
+
+                await _emailServices.SendEmailAsync(user.Email, message, "Đặt lại mật khẩu");
+
+                await transact.CommitAsync();
+                return "Success";
+            }
+            catch (Exception ex)
+            {
+                await transact.RollbackAsync();
+                return "Failed";
+            }
+        }
+
+        public async Task<string> ConfirmResetPasswordAsync(string email, string code)
+        {
+            //user
+            var user = await _userManager.FindByEmailAsync(email);
+
+            if (user == null)
+                return "User is not found";
+            //code in database 
+            //check code is equal or not
+            if (user.Code != code)
+                return "Invalid code";
+            return "Success";
+        }
+
+        public async Task<string> ResetPasswordAsync(string email, string Password)
+        {
+            var transact = _dbContext.Database.BeginTransaction();
+            try
+            {
+                var user = await _userManager.FindByEmailAsync(email);
+
+                if (user == null)
+                    return "User is not found";
+
+                var removeOldPassword = await _userManager.RemovePasswordAsync(user);
+                var updatePassword = await _userManager.AddPasswordAsync(user, Password);
+                await transact.CommitAsync();
+                return "Success";
+            }
+            catch (Exception ex)
+            {
+                await transact.RollbackAsync();
+                return "Failed";
+            }
+        }
+        #endregion
+    }
+}

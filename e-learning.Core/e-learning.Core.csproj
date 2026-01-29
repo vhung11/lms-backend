@@ -1,0 +1,49 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>e_learning.Core</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Features\Reviews\**" />
+    <Compile Remove="Mapping\AuthMapping\**" />
+    <EmbeddedResource Remove="Features\Reviews\**" />
+    <EmbeddedResource Remove="Mapping\AuthMapping\**" />
+    <None Remove="Features\Reviews\**" />
+    <None Remove="Mapping\AuthMapping\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\e-learning.Data\e-learning.Data.csproj" />
+    <ProjectReference Include="..\e-learning.infrastructure\e-learning.infrastructure.csproj" />
+    <ProjectReference Include="..\e-learning.Services\e-learning.Services.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Features\Categories\Commands\Handlers\" />
+    <Folder Include="Features\Categories\Commands\Models\" />
+    <Folder Include="Features\Categories\Commands\Validatiors\" />
+    <Folder Include="Features\Instructors\Commands\Validatiors\" />
+    <Folder Include="Features\Modules\Commands\Validatiors\" />
+    <Folder Include="Features\Review\Commands\Validatiors\" />
+
+    <Folder Include="Features\Videos\Queries\Handlers\" />
+    <Folder Include="Features\Videos\Queries\Models\" />
+    <Folder Include="Features\Videos\Queries\Responses\" />
+    <Folder Include="Mapping\CategoryMapping\CommandMapping\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AutoMapper.Extensions.Microsoft.DependencyInjection" Version="12.0.0" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
+    <PackageReference Include="Mapster.DependencyInjection" Version="1.0.1" />
+    <PackageReference Include="MediatR" Version="12.4.1" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.MSSqlServer" Version="8.2.0" />
+  </ItemGroup>
+
+</Project>
