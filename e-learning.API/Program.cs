@@ -19,11 +19,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
-builder.Services.AddCors(option =>
-{
-    option.AddPolicy("allowCors", policy => { policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader(); }
-    );
-});
 
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
@@ -56,9 +51,12 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("Cors", policy =>
     {
-        policy.AllowAnyHeader().AllowAnyOrigin().AllowAnyMethod();
+        policy.WithOrigins("https://lms.hungvv215588.id.vn")
+              .AllowAnyHeader()
+              .AllowAnyMethod();
     });
 });
+
 #endregion
 
 #region DependencyInjection
